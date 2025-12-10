@@ -7,7 +7,7 @@ import type { Env } from "./types";
 export { FastApiSearchMCP };
 
 /**
- * Fast Api Search MCP - OAuth Only
+ * FastAPI Search MCP - OAuth Only
  *
  * This MCP server uses OAuth 2.1 (WorkOS AuthKit) authentication.
  *
@@ -29,13 +29,12 @@ export { FastApiSearchMCP };
  * - search_fastapi_examples: Code examples and patterns search (4 tokens)
  */
 
-// Create OAuthProvider instance (used when OAuth authentication is needed)
+// Create OAuthProvider instance
 const oauthProvider = new OAuthProvider({
     // Dual transport support (SSE + Streamable HTTP)
-    // This ensures compatibility with all MCP clients (Claude, ChatGPT, etc.)
     apiHandlers: {
-        '/sse': FastApiSearchMCP.serveSSE('/sse'),  // Legacy SSE transport
-        '/mcp': FastApiSearchMCP.serve('/mcp'),     // New Streamable HTTP transport
+        '/sse': FastApiSearchMCP.serveSSE('/sse'),
+        '/mcp': FastApiSearchMCP.serve('/mcp'),
     },
 
     // OAuth authentication handler (WorkOS AuthKit integration)
@@ -57,55 +56,7 @@ export default {
         ctx: ExecutionContext
     ): Promise<Response> {
         try {
-            const url = new URL(request.url);
-
-            // RFC 9728: OAuth 2.0 Protected Resource Metadata
-            if (url.pathname === '/.well-known/oauth-protected-resource') {
-                return new Response(JSON.stringify({
-                    resource: `${url.origin}/mcp`,
-                    authorization_servers: ["https://api.workos.com"],
-                    bearer_methods_supported: ["header"],
-                    scopes_supported: ["mcp:read", "mcp:write"],
-                    resource_documentation: "https://wtyczki.ai/docs/fast-api-search-mcp",
-                    resource_policy_uri: "https://wtyczki.ai/privacy"
-                }), {
-                    status: 200,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*',
-                        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                        'Cache-Control': 'public, max-age=86400'
-                    }
-                });
-            }
-
-            // Authorization Server Metadata
-            if (url.pathname === '/.well-known/oauth-authorization-server') {
-                return new Response(JSON.stringify({
-                    issuer: "https://api.workos.com",
-                    authorization_endpoint: `${url.origin}/authorize`,
-                    token_endpoint: `${url.origin}/token`,
-                    registration_endpoint: `${url.origin}/register`,
-                    jwks_uri: "https://api.workos.com/.well-known/jwks.json",
-                    response_types_supported: ["code"],
-                    grant_types_supported: ["authorization_code"],
-                    code_challenge_methods_supported: ["S256"],
-                    token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
-                    scopes_supported: ["mcp:read", "mcp:write"],
-                    service_documentation: "https://wtyczki.ai/docs/oauth",
-                    ui_locales_supported: ["en-US", "pl-PL"]
-                }), {
-                    status: 200,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*',
-                        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                        'Cache-Control': 'public, max-age=86400'
-                    }
-                });
-            }
-
-            // All requests go through OAuth
+            // All requests go through OAuth provider
             return await oauthProvider.fetch(request, env, ctx);
 
         } catch (error) {
