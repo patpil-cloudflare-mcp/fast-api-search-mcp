@@ -80,8 +80,9 @@ FastAPI - Semantic search for FastAPI framework documentation
 - Pydantic model validation
 
 ## Usage Patterns
-- Use \`search_fastapi_docs\` for questions about FastAPI
-- Include specific context in queries for more accurate results (e.g., "How do I create a database dependency?")
+- Use \`search_fastapi_docs\` for general documentation questions
+- Use \`search_fastapi_examples\` for code examples and implementation patterns
+- Include specific context in queries for more accurate results
 - For building production APIs: Mention sync vs async preference
 
 ## Performance
@@ -288,6 +289,172 @@ FastAPI - Semantic search for FastAPI framework documentation
                         content: [{
                             type: "text" as const,
                             text: `Failed to search FastAPI framework documentation: ${errorMessage}`
+                        }],
+                        isError: true
+                    };
+                }
+            }
+        );
+
+        // ========================================================================
+        // Tool: search_fastapi_examples
+        // ========================================================================
+        // Searches for FastAPI code examples and implementation patterns
+        this.server.registerTool(
+            "search_fastapi_examples",
+            {
+                title: "Search FastAPI Examples",
+                description: "Search for FastAPI code examples and implementation patterns.",
+                inputSchema: {
+                    query: z.string().min(1).meta({ description: "Natural language question about FastAPI code examples (e.g., 'Show OAuth2 password flow example')" }),
+                },
+                outputSchema: z.object({
+                    success: z.boolean(),
+                    query: z.string(),
+                    rag_instance: z.string(),
+                    security_applied: z.object({
+                        pii_redacted: z.boolean(),
+                        pii_types_found: z.array(z.string()),
+                        html_sanitized: z.boolean()
+                    }),
+                    answer: z.string()
+                })
+            },
+            async ({ query }) => {
+                const TOOL_COST = 4; // Higher cost for code examples search
+                const TOOL_NAME = "search_fastapi_examples";
+                const RAG_NAME = "ai-search-fast_api_search";
+                const actionId = crypto.randomUUID();
+
+                try {
+                    // 1. Get user ID
+                    const userId = this.props?.userId;
+                    if (!userId) {
+                        throw new Error("User ID not found in authentication context");
+                    }
+
+                    // 2. Check token balance
+                    const balanceCheck = await checkBalance(this.env.TOKEN_DB, userId, TOOL_COST);
+
+                    // 3. Handle insufficient balance
+                    if (!balanceCheck.sufficient) {
+                        return {
+                            content: [{
+                                type: "text" as const,
+                                text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST)
+                            }],
+                            isError: true
+                        };
+                    }
+
+                    // 4. Execute AutoRAG query with code-focused parameters
+                    if (!this.env.AI) {
+                        throw new Error("Workers AI binding not configured. Add 'ai' binding to wrangler.jsonc");
+                    }
+
+                    const response = await this.env.AI.autorag(RAG_NAME).aiSearch({
+                        query: `code example: ${query}`,  // Prefix to focus on code examples
+                        rewrite_query: true,
+                        max_num_results: 5,  // Fewer but more focused results for examples
+                        ranking_options: {
+                            score_threshold: 0.5,  // Higher threshold for code quality
+                        },
+                    }) as { response: string };
+
+                    // 4.5. SECURITY: Sanitize and redact PII
+                    let processed = response.response;
+                    const securityPerfStart = Date.now();
+
+                    processed = sanitizeOutput(processed, {
+                        removeHtml: true,
+                        removeControlChars: true,
+                        normalizeWhitespace: true,
+                        maxLength: 10000
+                    });
+
+                    const needsPIIRedaction = hasPotentialPII(processed);
+                    let detectedPII: string[] = [];
+
+                    if (needsPIIRedaction) {
+                        console.log(`[Security] PII patterns detected, running full redaction`);
+                        const redactionResult = redactPII(processed, {
+                            redactEmails: false,
+                            redactPhones: true,
+                            redactCreditCards: true,
+                            redactSSN: true,
+                            redactBankAccounts: true,
+                            redactPESEL: true,
+                            redactPolishIdCard: true,
+                            redactPolishPassport: true,
+                            redactPolishPhones: true,
+                            placeholder: '[REDACTED]'
+                        });
+                        processed = redactionResult.redacted;
+                        detectedPII = redactionResult.detectedPII;
+                    }
+
+                    const securityDuration = Date.now() - securityPerfStart;
+                    console.log(`[Security] Processing took ${securityDuration}ms`);
+
+                    const validation = validateOutput(processed, {
+                        maxLength: 10000,
+                        expectedType: 'string'
+                    });
+
+                    if (!validation.valid) {
+                        throw new Error(`Output validation failed: ${validation.errors.join(', ')}`);
+                    }
+
+                    // 5. Consume tokens
+                    await consumeTokensWithRetry(
+                        this.env.TOKEN_DB,
+                        userId,
+                        TOOL_COST,
+                        "fast-api-search-mcp",
+                        TOOL_NAME,
+                        { query: query.substring(0, 100) },
+                        processed.substring(0, 200) + '...',
+                        true,
+                        actionId
+                    );
+
+                    // 6. Return result
+                    const output = {
+                        success: true,
+                        query,
+                        rag_instance: RAG_NAME,
+                        security_applied: {
+                            pii_redacted: detectedPII.length > 0,
+                            pii_types_found: detectedPII,
+                            html_sanitized: true
+                        },
+                        answer: processed
+                    };
+                    return {
+                        content: [{
+                            type: "text" as const,
+                            text: JSON.stringify(output, null, 2)
+                        }],
+                        structuredContent: output
+                    };
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+
+                    if (errorMessage.includes('AI Search instance not found')) {
+                        return {
+                            content: [{
+                                type: "text" as const,
+                                text: `AI Search instance '${RAG_NAME}' not found. Please verify in Cloudflare Dashboard.`
+                            }],
+                            isError: true
+                        };
+                    }
+
+                    console.error(`[AutoRAG] Query failed:`, error);
+                    return {
+                        content: [{
+                            type: "text" as const,
+                            text: `Failed to search FastAPI examples: ${errorMessage}`
                         }],
                         isError: true
                     };

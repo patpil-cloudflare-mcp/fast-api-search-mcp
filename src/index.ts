@@ -1,39 +1,32 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { FastApiSearchMCP } from "./server";
 import { AuthkitHandler } from "./authkit-handler";
-import { handleApiKeyRequest } from "./api-key-handler";
 import type { Env } from "./types";
 
 // Export the McpAgent class for Cloudflare Workers
 export { FastApiSearchMCP };
 
 /**
- * Fast Api Search M C P with Dual Authentication Support
+ * Fast Api Search MCP - OAuth Only
  *
- * This MCP server supports TWO authentication methods:
+ * This MCP server uses OAuth 2.1 (WorkOS AuthKit) authentication.
  *
- * 1. OAuth 2.1 (WorkOS AuthKit) - For OAuth-capable clients
- *    - Flow: Client → /authorize → WorkOS → Magic Auth → /callback → Tools
- *    - Used by: Claude Desktop, ChatGPT, OAuth-capable clients
- *    - Endpoints: /authorize, /callback, /token, /register
+ * Flow: Client → /authorize → WorkOS → Magic Auth → /callback → Tools
+ * Used by: Claude Desktop, ChatGPT, OAuth-capable clients
  *
- * 2. API Key Authentication - For non-OAuth clients
- *    - Flow: Client sends Authorization: Bearer wtyk_XXX → Validate → Tools
- *    - Used by: AnythingLLM, Cursor IDE, custom scripts
- *    - Endpoints: /sse, /mcp (with wtyk_ API key in header)
+ * MCP Endpoints:
+ * - /sse - Server-Sent Events transport
+ * - /mcp - Streamable HTTP transport
  *
- * MCP Endpoints (support both auth methods):
- * - /sse - Server-Sent Events transport (for AnythingLLM, Claude Desktop)
- * - /mcp - Streamable HTTP transport (for ChatGPT and modern clients)
+ * OAuth Endpoints:
+ * - /authorize - Initiates OAuth flow
+ * - /callback - Handles OAuth callback
+ * - /token - Token endpoint
+ * - /register - Dynamic Client Registration
  *
- * OAuth Endpoints (OAuth only):
- * - /authorize - Initiates OAuth flow, redirects to WorkOS AuthKit
- * - /callback - Handles OAuth callback from WorkOS
- * - /token - Token endpoint for OAuth clients
- * - /register - Dynamic Client Registration endpoint
- *
- * Available Tools (after authentication):
- *  * - search_fastapi_docs: Search FastAPI documentation for endpoints, routes, dependencies, middleware, and general usage. (3 tokens)
+ * Available Tools:
+ * - search_fastapi_docs: General FastAPI documentation search (3 tokens)
+ * - search_fastapi_examples: Code examples and patterns search (4 tokens)
  */
 
 // Create OAuthProvider instance (used when OAuth authentication is needed)
@@ -55,11 +48,7 @@ const oauthProvider = new OAuthProvider({
 });
 
 /**
- * Custom fetch handler with dual authentication support
- *
- * This handler detects the authentication method and routes requests accordingly:
- * - API key (wtyk_*) → Direct API key authentication
- * - OAuth token or no auth → OAuth flow via OAuthProvider
+ * Fetch handler - OAuth only
  */
 export default {
     async fetch(
@@ -69,22 +58,12 @@ export default {
     ): Promise<Response> {
         try {
             const url = new URL(request.url);
-            const authHeader = request.headers.get("Authorization");
 
-            // =================================================================
             // RFC 9728: OAuth 2.0 Protected Resource Metadata
-            // =================================================================
-            // Auto-discovery endpoints for OAuth 2.1 compliance
-            // These enable MCP clients to automatically discover authorization
-            // server location and required scopes.
-
-            // Protected Resource Metadata (primary discovery endpoint)
             if (url.pathname === '/.well-known/oauth-protected-resource') {
                 return new Response(JSON.stringify({
                     resource: `${url.origin}/mcp`,
-                    authorization_servers: [
-                        "https://api.workos.com"  // WorkOS authorization server
-                    ],
+                    authorization_servers: ["https://api.workos.com"],
                     bearer_methods_supported: ["header"],
                     scopes_supported: ["mcp:read", "mcp:write"],
                     resource_documentation: "https://wtyczki.ai/docs/fast-api-search-mcp",
@@ -95,12 +74,12 @@ export default {
                         'Content-Type': 'application/json',
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                        'Cache-Control': 'public, max-age=86400'  // 24 hours
+                        'Cache-Control': 'public, max-age=86400'
                     }
                 });
             }
 
-            // Authorization Server Metadata (OAuth 2.0 discovery)
+            // Authorization Server Metadata
             if (url.pathname === '/.well-known/oauth-authorization-server') {
                 return new Response(JSON.stringify({
                     issuer: "https://api.workos.com",
@@ -110,11 +89,8 @@ export default {
                     jwks_uri: "https://api.workos.com/.well-known/jwks.json",
                     response_types_supported: ["code"],
                     grant_types_supported: ["authorization_code"],
-                    code_challenge_methods_supported: ["S256"],  // PKCE OAuth 2.1
-                    token_endpoint_auth_methods_supported: [
-                        "client_secret_basic",
-                        "client_secret_post"
-                    ],
+                    code_challenge_methods_supported: ["S256"],
+                    token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
                     scopes_supported: ["mcp:read", "mcp:write"],
                     service_documentation: "https://wtyczki.ai/docs/oauth",
                     ui_locales_supported: ["en-US", "pl-PL"]
@@ -124,23 +100,16 @@ export default {
                         'Content-Type': 'application/json',
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                        'Cache-Control': 'public, max-age=86400'  // 24 hours
+                        'Cache-Control': 'public, max-age=86400'
                     }
                 });
             }
 
-            // Check for API key authentication on MCP endpoints
-            if (isApiKeyRequest(url.pathname, authHeader)) {
-                console.log(`🔐 [Dual Auth] API key request detected: ${url.pathname}`);
-                return await handleApiKeyRequest(request, env, ctx, url.pathname);
-            }
-
-            // Otherwise, use OAuth flow
-            console.log(`🔐 [Dual Auth] OAuth request: ${url.pathname}`);
+            // All requests go through OAuth
             return await oauthProvider.fetch(request, env, ctx);
 
         } catch (error) {
-            console.error("[Dual Auth] Error:", error);
+            console.error("[OAuth] Error:", error);
             return new Response(
                 JSON.stringify({
                     error: "Internal server error",
@@ -154,31 +123,3 @@ export default {
         }
     },
 };
-
-/**
- * Detect if request should use API key authentication
- *
- * Criteria:
- * 1. Must be an MCP endpoint (/sse or /mcp)
- * 2. Must have Authorization header with API key (starts with wtyk_)
- *
- * OAuth endpoints (/authorize, /callback, /token, /register) are NEVER intercepted.
- *
- * @param pathname - Request pathname
- * @param authHeader - Authorization header value
- * @returns true if API key request, false otherwise
- */
-function isApiKeyRequest(pathname: string, authHeader: string | null): boolean {
-    // Only intercept MCP transport endpoints
-    if (pathname !== "/sse" && pathname !== "/mcp") {
-        return false;
-    }
-
-    // Check if Authorization header contains API key
-    if (!authHeader) {
-        return false;
-    }
-
-    const token = authHeader.replace("Bearer ", "");
-    return token.startsWith("wtyk_");
-}
