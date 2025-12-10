@@ -125,7 +125,7 @@ FastAPI - Semantic search for FastAPI framework documentation
             async ({ query }) => {
                 const TOOL_COST = 3; // Standard cost for AutoRAG semantic search
                 const TOOL_NAME = "search_fastapi_docs";
-                const RAG_NAME = "ai-search-fast_api_search";
+                const RAG_NAME = "fastapi";
                 const actionId = crypto.randomUUID();
 
                 try {
@@ -323,7 +323,7 @@ FastAPI - Semantic search for FastAPI framework documentation
             async ({ query }) => {
                 const TOOL_COST = 4; // Higher cost for code examples search
                 const TOOL_NAME = "search_fastapi_examples";
-                const RAG_NAME = "ai-search-fast_api_search";
+                const RAG_NAME = "fastapi";
                 const actionId = crypto.randomUUID();
 
                 try {
