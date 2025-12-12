@@ -28,6 +28,7 @@ import { ApiClient } from "./api-client";
 import { checkBalance, consumeTokensWithRetry } from "./tokenConsumption";
 import { formatInsufficientTokensError, formatAccountDeletedError } from "./tokenUtils";
 import { sanitizeOutput, redactPII, validateOutput } from 'pilpat-mcp-security';
+import { TOOL_DESCRIPTIONS, TOOL_TITLES, PARAM_DESCRIPTIONS } from './tool-descriptions';
 
 /**
  * Simple LRU (Least Recently Used) Cache for MCP Server instances
@@ -266,7 +267,7 @@ async function getOrCreateServer(
 
   // Create new MCP server
   const server = new McpServer({
-    name: "Crawl4AI Documentation AI Search MCP (API Key)",
+    name: "FastAPI Search (API Key)",
     version: "1.0.0",
   });
 
@@ -275,15 +276,15 @@ async function getOrCreateServer(
   // DO NOT uncomment until you have actual API client methods implemented
 
   // ========================================================================
-  // Tool: Search Crawl4AI Documentation (3 token cost)
+  // Tool: Search FastAPI Docs (3 token cost)
   // ========================================================================
   server.registerTool(
-    "search_crawl4ai_docs",
+    "search_fastapi_docs",
     {
-      title: "Search {{KNOWLEDGE_BASE_NAME}}",
-      description: "{{TOOL_DESCRIPTION}}",
+      title: TOOL_TITLES.SEARCH_FASTAPI_DOCS,
+      description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_DOCS,
       inputSchema: {
-        query: z.string().min(1).meta({ description: "Natural language question about {{KNOWLEDGE_BASE_NAME}} (e.g., '{{TOOL_PARAM_EXAMPLE}}')" }),
+        query: z.string().min(1).describe(PARAM_DESCRIPTIONS.QUERY_DOCS),
       },
       outputSchema: z.object({
         success: z.boolean(),
@@ -299,8 +300,8 @@ async function getOrCreateServer(
     },
     async ({ query }) => {
       const TOOL_COST = 3;
-      const TOOL_NAME = "search_crawl4ai_docs";
-      const RAG_NAME = "crawl4ai";
+      const TOOL_NAME = "search_fastapi_docs";
+      const RAG_NAME = "fast_api_search";
       const actionId = crypto.randomUUID();
 
       try {
@@ -376,7 +377,7 @@ async function getOrCreateServer(
           env.TOKEN_DB,
           userId,
           TOOL_COST,
-          "{{SERVER_NAME}}",
+          "fast-api-search-mcp",
           TOOL_NAME,
           { query: query.substring(0, 100) },
           processed.substring(0, 200) + '...',
@@ -398,7 +399,7 @@ async function getOrCreateServer(
         return {
           content: [{
             type: "text" as const,
-            text: JSON.stringify(output, null, 2)
+            text: processed  // Return answer directly, avoid double JSON encoding
           }],
           structuredContent: output
         };
@@ -420,7 +421,7 @@ async function getOrCreateServer(
           return {
             content: [{
               type: "text" as const,
-              text: "Crawl4AI documentation is still indexing. Please try again in a few minutes."
+              text: "FastAPI documentation is still indexing. Please try again in a few minutes."
             }],
             isError: true,
           };
@@ -430,7 +431,160 @@ async function getOrCreateServer(
         return {
           content: [{
             type: "text" as const,
-            text: `Failed to search Crawl4AI documentation: ${errorMessage}`
+            text: `Failed to search FastAPI documentation: ${errorMessage}`
+          }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ========================================================================
+  // Tool: Search FastAPI Examples (4 token cost)
+  // ========================================================================
+  server.registerTool(
+    "search_fastapi_examples",
+    {
+      title: TOOL_TITLES.SEARCH_FASTAPI_EXAMPLES,
+      description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_EXAMPLES,
+      inputSchema: {
+        query: z.string().min(1).describe(PARAM_DESCRIPTIONS.QUERY_EXAMPLES),
+      },
+      outputSchema: z.object({
+        success: z.boolean(),
+        query: z.string(),
+        rag_instance: z.string(),
+        security_applied: z.object({
+          pii_redacted: z.boolean(),
+          pii_types_found: z.array(z.string()),
+          html_sanitized: z.boolean()
+        }),
+        answer: z.string()
+      })
+    },
+    async ({ query }) => {
+      const TOOL_COST = 4;
+      const TOOL_NAME = "search_fastapi_examples";
+      const RAG_NAME = "fast_api_search";
+      const actionId = crypto.randomUUID();
+
+      try {
+        const balanceCheck = await checkBalance(env.TOKEN_DB, userId, TOOL_COST);
+
+        if (balanceCheck.userDeleted) {
+          return {
+            content: [{ type: "text" as const, text: formatAccountDeletedError(TOOL_NAME) }],
+            isError: true,
+          };
+        }
+
+        if (!balanceCheck.sufficient) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST),
+            }],
+            isError: true,
+          };
+        }
+
+        if (!env.AI) {
+          throw new Error("Workers AI binding not configured. Add 'ai' binding to wrangler.jsonc");
+        }
+
+        const response = await env.AI.autorag(RAG_NAME).aiSearch({
+          query: `code example: ${query}`,  // Prefix to focus on code examples
+          rewrite_query: true,
+          max_num_results: 5,  // Fewer but more focused results for examples
+          ranking_options: {
+            score_threshold: 0.5,  // Higher threshold for code quality
+          },
+        }) as { response: string };
+
+        let processed = response.response;
+
+        processed = sanitizeOutput(processed, {
+          removeHtml: true,
+          removeControlChars: true,
+          normalizeWhitespace: true,
+          maxLength: 10000
+        });
+
+        const { redacted, detectedPII } = redactPII(processed, {
+          redactEmails: false,
+          redactPhones: true,
+          redactCreditCards: true,
+          redactSSN: true,
+          redactBankAccounts: true,
+          redactPESEL: true,
+          redactPolishIdCard: true,
+          redactPolishPassport: true,
+          redactPolishPhones: true,
+          placeholder: '[REDACTED]'
+        });
+        processed = redacted;
+
+        if (detectedPII.length > 0) {
+          console.warn(`[Security] Tool ${TOOL_NAME}: Redacted PII types:`, detectedPII);
+        }
+
+        const validation = validateOutput(processed, {
+          maxLength: 10000,
+          expectedType: 'string'
+        });
+
+        if (!validation.valid) {
+          throw new Error(`Output validation failed: ${validation.errors.join(', ')}`);
+        }
+
+        await consumeTokensWithRetry(
+          env.TOKEN_DB,
+          userId,
+          TOOL_COST,
+          "fast-api-search-mcp",
+          TOOL_NAME,
+          { query: query.substring(0, 100) },
+          processed.substring(0, 200) + '...',
+          true,
+          actionId
+        );
+
+        const output = {
+          success: true,
+          query,
+          rag_instance: RAG_NAME,
+          security_applied: {
+            pii_redacted: detectedPII.length > 0,
+            pii_types_found: detectedPII,
+            html_sanitized: true
+          },
+          answer: processed
+        };
+        return {
+          content: [{
+            type: "text" as const,
+            text: processed  // Return answer directly, avoid double JSON encoding
+          }],
+          structuredContent: output
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        if (errorMessage.includes('AI Search instance not found')) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `AI Search instance '${RAG_NAME}' not found. Please verify in Cloudflare Dashboard.`
+            }],
+            isError: true,
+          };
+        }
+
+        console.error(`[AutoRAG] Query failed:`, error);
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Failed to search FastAPI examples: ${errorMessage}`
           }],
           isError: true,
         };
@@ -559,7 +713,7 @@ function handleInitialize(request: {
       tools: {},
     },
     serverInfo: {
-      name: "Mixpost AI Search MCP", // TODO: Update server name
+      name: "FastAPI Search MCP",
       version: "1.0.0",
     },
   });
@@ -597,17 +751,47 @@ async function handleToolsList(
 
   // Manually define tools since McpServer doesn't expose listTools()
   // These match the tools registered in getOrCreateServer()
-  // TODO: Update this when you add new tools!
   const tools = [
     {
-      name: "search_crawl4ai_docs",
-      description: "{{TOOL_DESCRIPTION}}",
+      name: "search_fastapi_docs",
+      description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_DOCS,
       inputSchema: {
         type: "object",
         properties: {
           query: {
             type: "string",
-            description: "Natural language question about {{KNOWLEDGE_BASE_NAME}} (e.g., '{{TOOL_PARAM_EXAMPLE}}')"
+            description: PARAM_DESCRIPTIONS.QUERY_DOCS
+          }
+        },
+        required: ["query"]
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          success: { type: "boolean" },
+          query: { type: "string" },
+          rag_instance: { type: "string" },
+          security_applied: {
+            type: "object",
+            properties: {
+              pii_redacted: { type: "boolean" },
+              pii_types_found: { type: "array", items: { type: "string" } },
+              html_sanitized: { type: "boolean" }
+            }
+          },
+          answer: { type: "string" }
+        }
+      }
+    },
+    {
+      name: "search_fastapi_examples",
+      description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_EXAMPLES,
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: PARAM_DESCRIPTIONS.QUERY_EXAMPLES
           }
         },
         required: ["query"]
@@ -676,10 +860,13 @@ async function handleToolsCall(
 
     let result: any;
 
-    // TODO: Add cases for your tools here!
     switch (toolName) {
-      case "search_crawl4ai_docs":
-        result = await executeSearchCrawl4aiDocsTool(userId, toolArgs, env);
+      case "search_fastapi_docs":
+        result = await executeSearchFastAPIDocsTool(userId, toolArgs, env);
+        break;
+
+      case "search_fastapi_examples":
+        result = await executeSearchFastAPIExamplesTool(userId, toolArgs, env);
         break;
 
       default:
@@ -701,14 +888,14 @@ async function handleToolsCall(
   }
 }
 
-async function executeSearchCrawl4aiDocsTool(
+async function executeSearchFastAPIDocsTool(
   userId: string,
   args: any,
   env: Env
 ): Promise<any> {
   const TOOL_COST = 3;
-  const TOOL_NAME = "search_crawl4ai_docs";
-  const RAG_NAME = "crawl4ai";
+  const TOOL_NAME = "search_fastapi_docs";
+  const RAG_NAME = "fast_api_search";
   const actionId = crypto.randomUUID();
 
   try {
@@ -783,7 +970,7 @@ async function executeSearchCrawl4aiDocsTool(
       env.TOKEN_DB,
       userId,
       TOOL_COST,
-      "{{SERVER_NAME}}",
+      "fast-api-search-mcp",
       TOOL_NAME,
       { query: query.substring(0, 100) },
       processed.substring(0, 200) + '...',
@@ -805,7 +992,7 @@ async function executeSearchCrawl4aiDocsTool(
     return {
       content: [{
         type: "text",
-        text: JSON.stringify(output, null, 2)
+        text: processed  // Return answer directly, avoid double JSON encoding
       }],
       structuredContent: output
     };
@@ -827,7 +1014,7 @@ async function executeSearchCrawl4aiDocsTool(
       return {
         content: [{
           type: "text",
-          text: "Crawl4AI documentation is still indexing. Please try again in a few minutes."
+          text: "FastAPI documentation is still indexing. Please try again in a few minutes."
         }],
         isError: true
       };
@@ -837,7 +1024,139 @@ async function executeSearchCrawl4aiDocsTool(
     return {
       content: [{
         type: "text",
-        text: `Failed to search Crawl4AI documentation: ${errorMessage}`
+        text: `Failed to search FastAPI documentation: ${errorMessage}`
+      }],
+      isError: true
+    };
+  }
+}
+
+async function executeSearchFastAPIExamplesTool(
+  userId: string,
+  args: any,
+  env: Env
+): Promise<any> {
+  const TOOL_COST = 4;
+  const TOOL_NAME = "search_fastapi_examples";
+  const RAG_NAME = "fast_api_search";
+  const actionId = crypto.randomUUID();
+
+  try {
+    const { query } = args;
+
+    if (!query || typeof query !== 'string' || query.trim().length === 0) {
+      throw new Error("query parameter is required and must be a non-empty string");
+    }
+
+    const balanceCheck = await checkBalance(env.TOKEN_DB, userId, TOOL_COST);
+
+    if (!balanceCheck.sufficient) {
+      return {
+        content: [{
+          type: "text",
+          text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST)
+        }],
+        isError: true
+      };
+    }
+
+    if (!env.AI) {
+      throw new Error("Workers AI binding not configured. Add 'ai' binding to wrangler.jsonc");
+    }
+
+    const response = await env.AI.autorag(RAG_NAME).aiSearch({
+      query: `code example: ${query}`,  // Prefix to focus on code examples
+      rewrite_query: true,
+      max_num_results: 5,  // Fewer but more focused results for examples
+      ranking_options: {
+        score_threshold: 0.5,  // Higher threshold for code quality
+      },
+    }) as { response: string };
+
+    let processed = response.response;
+
+    processed = sanitizeOutput(processed, {
+      removeHtml: true,
+      removeControlChars: true,
+      normalizeWhitespace: true,
+      maxLength: 10000
+    });
+
+    const { redacted, detectedPII } = redactPII(processed, {
+      redactEmails: false,
+      redactPhones: true,
+      redactCreditCards: true,
+      redactSSN: true,
+      redactBankAccounts: true,
+      redactPESEL: true,
+      redactPolishIdCard: true,
+      redactPolishPassport: true,
+      redactPolishPhones: true,
+      placeholder: '[REDACTED]'
+    });
+    processed = redacted;
+
+    if (detectedPII.length > 0) {
+      console.warn(`[Security] Tool ${TOOL_NAME}: Redacted PII types:`, detectedPII);
+    }
+
+    const validation = validateOutput(processed, {
+      maxLength: 10000,
+      expectedType: 'string'
+    });
+
+    if (!validation.valid) {
+      throw new Error(`Output validation failed: ${validation.errors.join(', ')}`);
+    }
+
+    await consumeTokensWithRetry(
+      env.TOKEN_DB,
+      userId,
+      TOOL_COST,
+      "fast-api-search-mcp",
+      TOOL_NAME,
+      { query: query.substring(0, 100) },
+      processed.substring(0, 200) + '...',
+      true,
+      actionId
+    );
+
+    const output = {
+      success: true,
+      query,
+      rag_instance: RAG_NAME,
+      security_applied: {
+        pii_redacted: detectedPII.length > 0,
+        pii_types_found: detectedPII,
+        html_sanitized: true
+      },
+      answer: processed
+    };
+    return {
+      content: [{
+        type: "text",
+        text: processed  // Return answer directly, avoid double JSON encoding
+      }],
+      structuredContent: output
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    if (errorMessage.includes('AI Search instance not found')) {
+      return {
+        content: [{
+          type: "text",
+          text: `AI Search instance '${RAG_NAME}' not found. Please verify in Cloudflare Dashboard.`
+        }],
+        isError: true
+      };
+    }
+
+    console.error(`[AutoRAG] Query failed:`, error);
+    return {
+      content: [{
+        type: "text",
+        text: `Failed to search FastAPI examples: ${errorMessage}`
       }],
       isError: true
     };
@@ -959,8 +1278,7 @@ function jsonError(message: string, status: number): Response {
 
   // RFC 9728: Add WWW-Authenticate header for 401 Unauthorized responses
   if (status === 401) {
-    // Template variable will be substituted during generation
-    const baseUrl = 'https://{{SERVER_NAME}}.wtyczki.workers.dev';
+    const baseUrl = 'https://fast-api-search-mcp.wtyczki.ai';
 
     headers["WWW-Authenticate"] = [
       'Bearer',

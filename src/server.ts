@@ -6,6 +6,7 @@ import type { Props } from "./props";
 import { checkBalance, consumeTokensWithRetry } from "./tokenConsumption";
 import { formatInsufficientTokensError } from "./tokenUtils";
 import { sanitizeOutput, redactPII, validateOutput } from 'pilpat-mcp-security';
+import { TOOL_DESCRIPTIONS, TOOL_TITLES, PARAM_DESCRIPTIONS } from './tool-descriptions';
 
 /**
  * Fast heuristic check for potential PII patterns
@@ -66,10 +67,14 @@ function hasPotentialPII(text: string): boolean {
 export class FastApiSearchMCP extends McpAgent<Env, unknown, Props> {
     server = new McpServer(
         {
-            name: "Fast Api Search M C P",
+            name: "FastAPI Search",
             version: "1.0.0",
         },
         {
+            capabilities: {
+                tools: {},
+                prompts: { listChanged: true }  // Required for prompt support
+            },
             instructions: `
 FastAPI - Semantic search for FastAPI framework documentation
 
@@ -105,10 +110,10 @@ FastAPI - Semantic search for FastAPI framework documentation
         this.server.registerTool(
             "search_fastapi_docs",
             {
-                title: "Search FastAPI Docs",
-                description: "Search FastAPI documentation for endpoints, routes, dependencies, middleware, and general usage.",
+                title: TOOL_TITLES.SEARCH_FASTAPI_DOCS,
+                description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_DOCS,
                 inputSchema: {
-                    query: z.string().min(1).meta({ description: "Natural language question about FastAPI (e.g., 'How do I handle file uploads?')" }),
+                    query: z.string().min(1).describe(PARAM_DESCRIPTIONS.QUERY_DOCS),
                 },
                 outputSchema: z.object({
                     success: z.boolean(),
@@ -253,7 +258,7 @@ FastAPI - Semantic search for FastAPI framework documentation
                     return {
                         content: [{
                             type: "text" as const,
-                            text: JSON.stringify(output, null, 2)
+                            text: processed  // Return answer directly, avoid double JSON encoding
                         }],
                         structuredContent: output
                     };
@@ -303,10 +308,10 @@ FastAPI - Semantic search for FastAPI framework documentation
         this.server.registerTool(
             "search_fastapi_examples",
             {
-                title: "Search FastAPI Examples",
-                description: "Search for FastAPI code examples and implementation patterns.",
+                title: TOOL_TITLES.SEARCH_FASTAPI_EXAMPLES,
+                description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_EXAMPLES,
                 inputSchema: {
-                    query: z.string().min(1).meta({ description: "Natural language question about FastAPI code examples (e.g., 'Show OAuth2 password flow example')" }),
+                    query: z.string().min(1).describe(PARAM_DESCRIPTIONS.QUERY_EXAMPLES),
                 },
                 outputSchema: z.object({
                     success: z.boolean(),
@@ -433,7 +438,7 @@ FastAPI - Semantic search for FastAPI framework documentation
                     return {
                         content: [{
                             type: "text" as const,
-                            text: JSON.stringify(output, null, 2)
+                            text: processed  // Return answer directly, avoid double JSON encoding
                         }],
                         structuredContent: output
                     };
@@ -460,6 +465,59 @@ FastAPI - Semantic search for FastAPI framework documentation
                     };
                 }
             }
+        );
+
+        // ========================================================================
+        // PROMPT REGISTRATION: SDK 1.20+ registerPrompt() Pattern
+        // Progressive complexity: Core prompt first, enhanced workflow second
+        // ========================================================================
+
+        // Prompt 1: Core Function (simple, direct)
+        this.server.registerPrompt(
+            "search-docs",
+            {
+                title: "Search FastAPI Documentation",
+                description: "Search the official FastAPI documentation for a specific topic or concept.",
+                argsSchema: {
+                    topic: z.string()
+                        .min(2)
+                        .max(200)
+                        .describe("Topic or concept to search (e.g., 'dependency injection', 'OAuth2 flow', 'middleware')")
+                }
+            },
+            async ({ topic }) => ({
+                messages: [{
+                    role: "user",
+                    content: {
+                        type: "text",
+                        text: `Please use the 'search_fastapi_docs' tool to find information about: ${topic}`
+                    }
+                }]
+            })
+        );
+
+        // Prompt 2: Enhanced Workflow (adds context for code examples)
+        this.server.registerPrompt(
+            "find-code-example",
+            {
+                title: "Find Code Example",
+                description: "Search for Python code examples and implementation patterns in FastAPI documentation.",
+                argsSchema: {
+                    feature: z.string()
+                        .min(2)
+                        .max(200)
+                        .describe("FastAPI feature needing code example (e.g., 'file upload', 'WebSocket', 'background tasks')")
+                }
+            },
+            async ({ feature }) => ({
+                messages: [{
+                    role: "user",
+                    content: {
+                        type: "text",
+                        text: `Please use the 'search_fastapi_examples' tool to find Python code examples for: ${feature}. Focus on implementation patterns and best practices.`
+                    }
+                }]
+            })
         );
     }
 }
