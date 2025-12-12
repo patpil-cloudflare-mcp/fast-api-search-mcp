@@ -284,7 +284,7 @@ async function getOrCreateServer(
       title: TOOL_TITLES.SEARCH_FASTAPI_DOCS,
       description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_DOCS,
       inputSchema: {
-        query: z.string().min(1).describe(PARAM_DESCRIPTIONS.QUERY_DOCS),
+        query: z.string().min(1).meta({ description: PARAM_DESCRIPTIONS.QUERY_DOCS }),
       },
       outputSchema: z.object({
         success: z.boolean(),
@@ -448,7 +448,7 @@ async function getOrCreateServer(
       title: TOOL_TITLES.SEARCH_FASTAPI_EXAMPLES,
       description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_EXAMPLES,
       inputSchema: {
-        query: z.string().min(1).describe(PARAM_DESCRIPTIONS.QUERY_EXAMPLES),
+        query: z.string().min(1).meta({ description: PARAM_DESCRIPTIONS.QUERY_EXAMPLES }),
       },
       outputSchema: z.object({
         success: z.boolean(),

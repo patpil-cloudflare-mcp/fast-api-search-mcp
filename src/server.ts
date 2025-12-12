@@ -113,7 +113,7 @@ FastAPI - Semantic search for FastAPI framework documentation
                 title: TOOL_TITLES.SEARCH_FASTAPI_DOCS,
                 description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_DOCS,
                 inputSchema: {
-                    query: z.string().min(1).describe(PARAM_DESCRIPTIONS.QUERY_DOCS),
+                    query: z.string().min(1).meta({ description: PARAM_DESCRIPTIONS.QUERY_DOCS }),
                 },
                 outputSchema: z.object({
                     success: z.boolean(),
@@ -311,7 +311,7 @@ FastAPI - Semantic search for FastAPI framework documentation
                 title: TOOL_TITLES.SEARCH_FASTAPI_EXAMPLES,
                 description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_EXAMPLES,
                 inputSchema: {
-                    query: z.string().min(1).describe(PARAM_DESCRIPTIONS.QUERY_EXAMPLES),
+                    query: z.string().min(1).meta({ description: PARAM_DESCRIPTIONS.QUERY_EXAMPLES }),
                 },
                 outputSchema: z.object({
                     success: z.boolean(),
@@ -482,7 +482,7 @@ FastAPI - Semantic search for FastAPI framework documentation
                     topic: z.string()
                         .min(2)
                         .max(200)
-                        .describe("Topic or concept to search (e.g., 'dependency injection', 'OAuth2 flow', 'middleware')")
+                        .meta({ description: "Topic or concept to search (e.g., 'dependency injection', 'OAuth2 flow', 'middleware')" })
                 }
             },
             async ({ topic }) => ({
@@ -506,7 +506,7 @@ FastAPI - Semantic search for FastAPI framework documentation
                     feature: z.string()
                         .min(2)
                         .max(200)
-                        .describe("FastAPI feature needing code example (e.g., 'file upload', 'WebSocket', 'background tasks')")
+                        .meta({ description: "FastAPI feature needing code example (e.g., 'file upload', 'WebSocket', 'background tasks')" })
                 }
             },
             async ({ feature }) => ({
