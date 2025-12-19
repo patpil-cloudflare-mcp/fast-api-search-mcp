@@ -27,7 +27,6 @@ import * as z from "zod/v4";
 import { ApiClient } from "./api-client";
 import { checkBalance, consumeTokensWithRetry } from "./tokenConsumption";
 import { formatInsufficientTokensError, formatAccountDeletedError } from "./tokenUtils";
-import { sanitizeOutput, redactPII, validateOutput } from 'pilpat-mcp-security';
 import { TOOL_DESCRIPTIONS, TOOL_TITLES, PARAM_DESCRIPTIONS } from './tool-descriptions';
 
 /**
@@ -282,21 +281,11 @@ async function getOrCreateServer(
     "search_fastapi_docs",
     {
       title: TOOL_TITLES.SEARCH_FASTAPI_DOCS,
-      description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_DOCS,
+      description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_DOCS + " Returns detailed answers directly as text.",
       inputSchema: {
         query: z.string().min(1).meta({ description: PARAM_DESCRIPTIONS.QUERY_DOCS }),
-      },
-      outputSchema: z.object({
-        success: z.boolean(),
-        query: z.string(),
-        rag_instance: z.string(),
-        security_applied: z.object({
-          pii_redacted: z.boolean(),
-          pii_types_found: z.array(z.string()),
-          html_sanitized: z.boolean()
-        }),
-        answer: z.string()
-      })
+      }
+      // Note: No outputSchema - plain text only (Cloudflare pattern)
     },
     async ({ query }) => {
       const TOOL_COST = 3;
@@ -337,42 +326,7 @@ async function getOrCreateServer(
           },
         }) as { response: string };
 
-        let processed = response.response;
-
-        processed = sanitizeOutput(processed, {
-          removeHtml: true,
-          removeControlChars: true,
-          normalizeWhitespace: true,
-          maxLength: 10000
-        });
-
-        const { redacted, detectedPII } = redactPII(processed, {
-          redactEmails: false,
-          redactPhones: true,
-          redactCreditCards: true,
-          redactSSN: true,
-          redactBankAccounts: true,
-          redactPESEL: true,
-          redactPolishIdCard: true,
-          redactPolishPassport: true,
-          redactPolishPhones: true,
-          placeholder: '[REDACTED]'
-        });
-        processed = redacted;
-
-        if (detectedPII.length > 0) {
-          console.warn(`[Security] Tool ${TOOL_NAME}: Redacted PII types:`, detectedPII);
-        }
-
-        const validation = validateOutput(processed, {
-          maxLength: 10000,
-          expectedType: 'string'
-        });
-
-        if (!validation.valid) {
-          throw new Error(`Output validation failed: ${validation.errors.join(', ')}`);
-        }
-
+        // 5. Consume tokens WITH RETRY and idempotency protection
         await consumeTokensWithRetry(
           env.TOKEN_DB,
           userId,
@@ -380,28 +334,19 @@ async function getOrCreateServer(
           "fast-api-search-mcp",
           TOOL_NAME,
           { query: query.substring(0, 100) },
-          processed.substring(0, 200) + '...',
+          response.response.substring(0, 200) + '...',
           true,
           actionId
         );
 
-        const output = {
-          success: true,
-          query,
-          rag_instance: RAG_NAME,
-          security_applied: {
-            pii_redacted: detectedPII.length > 0,
-            pii_types_found: detectedPII,
-            html_sanitized: true
-          },
-          answer: processed
-        };
+        // 6. Return AutoRAG result as plain text
+        // Note: Plain text only (no outputSchema or structuredContent)
+        // Follows Cloudflare pattern and prevents MCP validation errors
         return {
           content: [{
             type: "text" as const,
-            text: processed  // Return answer directly, avoid double JSON encoding
-          }],
-          structuredContent: output
+            text: response.response  // Return answer directly as plain text
+          }]
         };
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -446,21 +391,11 @@ async function getOrCreateServer(
     "search_fastapi_examples",
     {
       title: TOOL_TITLES.SEARCH_FASTAPI_EXAMPLES,
-      description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_EXAMPLES,
+      description: TOOL_DESCRIPTIONS.SEARCH_FASTAPI_EXAMPLES + " Returns code examples directly as text.",
       inputSchema: {
         query: z.string().min(1).meta({ description: PARAM_DESCRIPTIONS.QUERY_EXAMPLES }),
-      },
-      outputSchema: z.object({
-        success: z.boolean(),
-        query: z.string(),
-        rag_instance: z.string(),
-        security_applied: z.object({
-          pii_redacted: z.boolean(),
-          pii_types_found: z.array(z.string()),
-          html_sanitized: z.boolean()
-        }),
-        answer: z.string()
-      })
+      }
+      // Note: No outputSchema - plain text only (Cloudflare pattern)
     },
     async ({ query }) => {
       const TOOL_COST = 4;
@@ -501,42 +436,7 @@ async function getOrCreateServer(
           },
         }) as { response: string };
 
-        let processed = response.response;
-
-        processed = sanitizeOutput(processed, {
-          removeHtml: true,
-          removeControlChars: true,
-          normalizeWhitespace: true,
-          maxLength: 10000
-        });
-
-        const { redacted, detectedPII } = redactPII(processed, {
-          redactEmails: false,
-          redactPhones: true,
-          redactCreditCards: true,
-          redactSSN: true,
-          redactBankAccounts: true,
-          redactPESEL: true,
-          redactPolishIdCard: true,
-          redactPolishPassport: true,
-          redactPolishPhones: true,
-          placeholder: '[REDACTED]'
-        });
-        processed = redacted;
-
-        if (detectedPII.length > 0) {
-          console.warn(`[Security] Tool ${TOOL_NAME}: Redacted PII types:`, detectedPII);
-        }
-
-        const validation = validateOutput(processed, {
-          maxLength: 10000,
-          expectedType: 'string'
-        });
-
-        if (!validation.valid) {
-          throw new Error(`Output validation failed: ${validation.errors.join(', ')}`);
-        }
-
+        // 5. Consume tokens WITH RETRY and idempotency protection
         await consumeTokensWithRetry(
           env.TOKEN_DB,
           userId,
@@ -544,28 +444,19 @@ async function getOrCreateServer(
           "fast-api-search-mcp",
           TOOL_NAME,
           { query: query.substring(0, 100) },
-          processed.substring(0, 200) + '...',
+          response.response.substring(0, 200) + '...',
           true,
           actionId
         );
 
-        const output = {
-          success: true,
-          query,
-          rag_instance: RAG_NAME,
-          security_applied: {
-            pii_redacted: detectedPII.length > 0,
-            pii_types_found: detectedPII,
-            html_sanitized: true
-          },
-          answer: processed
-        };
+        // 6. Return AutoRAG result as plain text
+        // Note: Plain text only (no outputSchema or structuredContent)
+        // Follows Cloudflare pattern and prevents MCP validation errors
         return {
           content: [{
             type: "text" as const,
-            text: processed  // Return answer directly, avoid double JSON encoding
-          }],
-          structuredContent: output
+            text: response.response  // Return answer directly as plain text
+          }]
         };
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -764,24 +655,8 @@ async function handleToolsList(
           }
         },
         required: ["query"]
-      },
-      outputSchema: {
-        type: "object",
-        properties: {
-          success: { type: "boolean" },
-          query: { type: "string" },
-          rag_instance: { type: "string" },
-          security_applied: {
-            type: "object",
-            properties: {
-              pii_redacted: { type: "boolean" },
-              pii_types_found: { type: "array", items: { type: "string" } },
-              html_sanitized: { type: "boolean" }
-            }
-          },
-          answer: { type: "string" }
-        }
       }
+      // Note: No outputSchema - plain text only (Cloudflare pattern)
     },
     {
       name: "search_fastapi_examples",
@@ -795,24 +670,8 @@ async function handleToolsList(
           }
         },
         required: ["query"]
-      },
-      outputSchema: {
-        type: "object",
-        properties: {
-          success: { type: "boolean" },
-          query: { type: "string" },
-          rag_instance: { type: "string" },
-          security_applied: {
-            type: "object",
-            properties: {
-              pii_redacted: { type: "boolean" },
-              pii_types_found: { type: "array", items: { type: "string" } },
-              html_sanitized: { type: "boolean" }
-            }
-          },
-          answer: { type: "string" }
-        }
       }
+      // Note: No outputSchema - plain text only (Cloudflare pattern)
     }
   ];
 
@@ -930,42 +789,7 @@ async function executeSearchFastAPIDocsTool(
       },
     }) as { response: string };
 
-    let processed = response.response;
-
-    processed = sanitizeOutput(processed, {
-      removeHtml: true,
-      removeControlChars: true,
-      normalizeWhitespace: true,
-      maxLength: 10000
-    });
-
-    const { redacted, detectedPII } = redactPII(processed, {
-      redactEmails: false,
-      redactPhones: true,
-      redactCreditCards: true,
-      redactSSN: true,
-      redactBankAccounts: true,
-      redactPESEL: true,
-      redactPolishIdCard: true,
-      redactPolishPassport: true,
-      redactPolishPhones: true,
-      placeholder: '[REDACTED]'
-    });
-    processed = redacted;
-
-    if (detectedPII.length > 0) {
-      console.warn(`[Security] Tool ${TOOL_NAME}: Redacted PII types:`, detectedPII);
-    }
-
-    const validation = validateOutput(processed, {
-      maxLength: 10000,
-      expectedType: 'string'
-    });
-
-    if (!validation.valid) {
-      throw new Error(`Output validation failed: ${validation.errors.join(', ')}`);
-    }
-
+    // 5. Consume tokens WITH RETRY and idempotency protection
     await consumeTokensWithRetry(
       env.TOKEN_DB,
       userId,
@@ -973,28 +797,19 @@ async function executeSearchFastAPIDocsTool(
       "fast-api-search-mcp",
       TOOL_NAME,
       { query: query.substring(0, 100) },
-      processed.substring(0, 200) + '...',
+      response.response.substring(0, 200) + '...',
       true,
       actionId
     );
 
-    const output = {
-      success: true,
-      query,
-      rag_instance: RAG_NAME,
-      security_applied: {
-        pii_redacted: detectedPII.length > 0,
-        pii_types_found: detectedPII,
-        html_sanitized: true
-      },
-      answer: processed
-    };
+    // 6. Return AutoRAG result as plain text
+    // Note: Plain text only (no outputSchema or structuredContent)
+    // Follows Cloudflare pattern and prevents MCP validation errors
     return {
       content: [{
         type: "text",
-        text: processed  // Return answer directly, avoid double JSON encoding
-      }],
-      structuredContent: output
+        text: response.response  // Return answer directly as plain text
+      }]
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1073,42 +888,7 @@ async function executeSearchFastAPIExamplesTool(
       },
     }) as { response: string };
 
-    let processed = response.response;
-
-    processed = sanitizeOutput(processed, {
-      removeHtml: true,
-      removeControlChars: true,
-      normalizeWhitespace: true,
-      maxLength: 10000
-    });
-
-    const { redacted, detectedPII } = redactPII(processed, {
-      redactEmails: false,
-      redactPhones: true,
-      redactCreditCards: true,
-      redactSSN: true,
-      redactBankAccounts: true,
-      redactPESEL: true,
-      redactPolishIdCard: true,
-      redactPolishPassport: true,
-      redactPolishPhones: true,
-      placeholder: '[REDACTED]'
-    });
-    processed = redacted;
-
-    if (detectedPII.length > 0) {
-      console.warn(`[Security] Tool ${TOOL_NAME}: Redacted PII types:`, detectedPII);
-    }
-
-    const validation = validateOutput(processed, {
-      maxLength: 10000,
-      expectedType: 'string'
-    });
-
-    if (!validation.valid) {
-      throw new Error(`Output validation failed: ${validation.errors.join(', ')}`);
-    }
-
+    // 5. Consume tokens WITH RETRY and idempotency protection
     await consumeTokensWithRetry(
       env.TOKEN_DB,
       userId,
@@ -1116,28 +896,19 @@ async function executeSearchFastAPIExamplesTool(
       "fast-api-search-mcp",
       TOOL_NAME,
       { query: query.substring(0, 100) },
-      processed.substring(0, 200) + '...',
+      response.response.substring(0, 200) + '...',
       true,
       actionId
     );
 
-    const output = {
-      success: true,
-      query,
-      rag_instance: RAG_NAME,
-      security_applied: {
-        pii_redacted: detectedPII.length > 0,
-        pii_types_found: detectedPII,
-        html_sanitized: true
-      },
-      answer: processed
-    };
+    // 6. Return AutoRAG result as plain text
+    // Note: Plain text only (no outputSchema or structuredContent)
+    // Follows Cloudflare pattern and prevents MCP validation errors
     return {
       content: [{
         type: "text",
-        text: processed  // Return answer directly, avoid double JSON encoding
-      }],
-      structuredContent: output
+        text: response.response  // Return answer directly as plain text
+      }]
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
