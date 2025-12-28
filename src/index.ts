@@ -14,9 +14,8 @@ export { FastApiSearchMCP };
  * Flow: Client → /authorize → WorkOS → Magic Auth → /callback → Tools
  * Used by: Claude Desktop, ChatGPT, OAuth-capable clients
  *
- * MCP Endpoints:
- * - /sse - Server-Sent Events transport
- * - /mcp - Streamable HTTP transport
+ * MCP Endpoint:
+ * - /mcp - Streamable HTTP transport (recommended for all MCP clients)
  *
  * OAuth Endpoints:
  * - /authorize - Initiates OAuth flow
@@ -31,9 +30,8 @@ export { FastApiSearchMCP };
 
 // Create OAuthProvider instance
 const oauthProvider = new OAuthProvider({
-    // Dual transport support (SSE + Streamable HTTP)
+    // Streamable HTTP transport (modern MCP standard)
     apiHandlers: {
-        '/sse': FastApiSearchMCP.serveSSE('/sse'),
         '/mcp': FastApiSearchMCP.serve('/mcp'),
     },
 

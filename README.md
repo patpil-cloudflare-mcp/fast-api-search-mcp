@@ -1,14 +1,13 @@
 # Crawl4AI Documentation AI Search MCP
 
-Semantic search over Crawl4AI library documentation using **Cloudflare AutoRAG (AI Search)** with token-based access control.
+Semantic search over Crawl4AI library documentation using **Cloudflare AutoRAG (AI Search)**.
 
 ## What is This?
 
 This MCP server provides intelligent search over Crawl4AI library documentation:
 - 🔍 **Semantic Search** - Natural language queries over Crawl4AI docs
 - 🤖 **AI-Generated Answers** - LLM responses grounded in documentation
-- 🔐 **Token-Based Access** - 3 tokens per search query
-- 🛡️ **PII Redaction** - Automatic privacy protection (Phase 2 security)
+- 🔐 **Dual Authentication** - OAuth 2.1 and API key support
 
 **AI Search Instance:** `ai-search-crawl4ai`
 **Status:** Ready (0 vectors indexed - indexing in progress)
@@ -26,9 +25,8 @@ This MCP server provides intelligent search over Crawl4AI library documentation:
 ✅ **Dual Transport Support** - Both SSE (legacy) and Streamable HTTP (future standard)
 ✅ **ChatGPT Ready** - Works with ChatGPT out-of-the-box (requires `/mcp` endpoint)
 ✅ **Claude Desktop Compatible** - Works with Claude Desktop via `/sse` endpoint
-✅ **Token System Integration** - Pay-per-use with shared D1 database
+✅ **Dual Authentication** - OAuth 2.1 and API key support
 ✅ **WorkOS Magic Auth** - Email + 6-digit code authentication
-✅ **Phase 2 Security** - PII redaction for AutoRAG outputs (Polish + International)
 ✅ **Production-Ready** - Complete error handling, logging, type safety
 ✅ **15-30 Minute Setup** - Copy, customize, deploy
 
@@ -180,7 +178,6 @@ This skeleton integrates with workflow validation scripts that ensure quality an
 - `validate-prp-schema.sh` - Validate PRP structure (40+ checks)
 - `validate-runtime-secrets.sh` - Verify secrets configured pre-deployment
 - `safe-command.sh` - Environment-aware TypeScript/Wrangler command wrapper
-- `verify-security-integration.sh` - Verify pilpat-mcp-security integration
 - `verify-consistency.sh` - Pre-flight configuration checks
 - `smart-push.sh` - Repository-aware git push
 
@@ -203,10 +200,7 @@ bash /path/to/scripts/verify-consistency.sh
 # 2. Runtime secret validation (CRITICAL)
 bash /path/to/scripts/validate-runtime-secrets.sh
 
-# 3. Security integration verification (optional)
-bash /path/to/scripts/verify-security-integration.sh
-
-# 4. TypeScript compilation (using safe wrapper)
+# 3. TypeScript compilation (using safe wrapper)
 bash /path/to/scripts/safe-command.sh tsc --noEmit
 ```
 
@@ -262,14 +256,6 @@ Use this checklist before each commit and deployment to ensure quality:
   - WorkOS credentials correct
   - API keys set
 
-- [ ] **Security Integration** (if using pilpat-mcp-security)
-  ```bash
-  bash ../../scripts/verify-security-integration.sh
-  ```
-  - Package installed (v1.1.0+)
-  - Step 4.5 implemented in both auth paths
-  - PII redaction enabled
-
 - [ ] **Git Remote Verification**
   ```bash
   git remote -v | grep origin
@@ -296,13 +282,13 @@ Use this checklist before each commit and deployment to ensure quality:
   - Complete OAuth login
   - Open Cloudflare Workers AI Playground
   - Test each tool
-  - Verify token consumption
+  - Verify responses are correct
 
 - [ ] **Functional Testing - API Key Path**
   - Configure AnythingLLM with API key
   - Connect to: `https://your-server.wtyczki.ai/mcp`
   - Test each tool
-  - Verify token consumption
+  - Verify responses are correct
 
 - [ ] **Transport Verification**
   - `/sse` endpoint responds (legacy)
@@ -310,14 +296,8 @@ Use this checklist before each commit and deployment to ensure quality:
   - Both return same results
 
 - [ ] **Error Handling**
-  - Test with insufficient tokens
   - Test with invalid parameters
   - Verify error messages are user-friendly
-
-- [ ] **Security Testing** (if using pilpat-mcp-security)
-  - Test PII redaction (send credit card number)
-  - Test HTML sanitization (send `<script>` tags)
-  - Verify console shows PII detection logs
 
 #### Post-Deployment Documentation
 
@@ -380,8 +360,7 @@ cd /Users/patpil/Documents/ai-projects/Cloudflare_mcp
 
 - **simpleLookup** (1 token) - Simple data lookup demonstrating low-cost operations
 - **searchAndAnalyze** (2 tokens) - Consolidated search with filtering and analysis
-- **processWithSecurity** (3 tokens) - Secure data processing with PII redaction and output sanitization
-- **queryAutoRAG** (2 tokens) - **NEW!** Query Cloudflare AutoRAG for semantic search + LLM responses
+- **queryAutoRAG** (2 tokens) - Query Cloudflare AutoRAG for semantic search + LLM responses
 
 ## AutoRAG (AI Search) Setup
 
@@ -446,8 +425,6 @@ The `queryAutoRAG` tool demonstrates:
 - ✅ LLM-generated answers grounded in your data
 - ✅ Query rewriting for better retrieval
 - ✅ Configurable similarity thresholds
-- ✅ PII redaction on outputs (credit cards, emails, SSN, PESEL, etc.)
-- ✅ Security logging for detected PII
 
 ### Remove AutoRAG (Optional)
 
@@ -499,109 +476,11 @@ This server implements **OAuth 2.1** with **PKCE** (Proof Key for Code Exchange)
 
 **Implementation**: `src/authkit-handler.ts:9-66`
 
-## Phase 2 Security
-
-Built-in security layer using `pilpat-mcp-security` v1.1.0+ with comprehensive PII protection.
-
-### Security Features
-
-✅ **Output Sanitization**
-- HTML tag removal and normalization
-- Control character filtering
-- Whitespace cleanup
-- Length limits to prevent token overflow
-
-✅ **PII Redaction** (US/International)
-- Credit card numbers
-- Social Security Numbers (SSN)
-- Bank account numbers
-- Email addresses (configurable - default: preserve)
-- Phone numbers
-
-✅ **Polish Market PII Support** (Phase 2)
-- PESEL (Polish national ID - 11 digits)
-- Polish ID cards (3 letters + 6 digits)
-- Polish passports (2 letters + 7 digits)
-- Polish phone numbers (+48 prefix)
-- NIP (Tax identification number)
-- REGON (Business registration number)
-
-✅ **Output Validation**
-- Type safety checks
-- Size constraints
-- Content integrity verification
-
-### Implementation (Step 4.5 Pattern)
-
-Every tool follows the 7-step token pattern with **Step 4.5 Security Processing**:
-
-```typescript
-// 4. Execute tool logic
-let result = await yourToolLogic();
-
-// 4.5. SECURITY (Phase 2)
-let processed = sanitizeOutput(result, {
-    removeHtml: true,
-    removeControlChars: true,
-    normalizeWhitespace: true,
-    maxLength: 5000
-});
-
-const { redacted, detectedPII } = redactPII(processed, {
-    // US/International
-    redactPhones: true,
-    redactCreditCards: true,
-    redactSSN: true,
-
-    // Polish Market
-    redactPESEL: true,
-    redactPolishIdCard: true,
-    redactPolishPassport: true,
-    redactPolishPhones: true,
-
-    placeholder: '[REDACTED]'
-});
-
-if (detectedPII.length > 0) {
-    console.warn(`[Security] Redacted PII types:`, detectedPII);
-}
-
-// 5. Consume tokens (use sanitized output)
-await consumeTokensWithRetry(..., redacted, ...);
-
-// 6. Return (use sanitized output)
-return { content: [{ type: "text", text: redacted }] };
-```
-
-### Security Testing
-
-Post-deployment security validation:
-```bash
-# Test HTML sanitization
-curl -X POST https://your-server.wtyczki.ai/mcp \
-  -H "Authorization: Bearer wtyk_XXX" \
-  -d '{"data": "<script>alert(1)</script>Test"}'
-
-# Test PII redaction (credit card)
-curl -X POST https://your-server.wtyczki.ai/mcp \
-  -H "Authorization: Bearer wtyk_XXX" \
-  -d '{"data": "Card: 4532-1111-2222-3333"}'
-
-# Test Polish PESEL redaction
-curl -X POST https://your-server.wtyczki.ai/mcp \
-  -H "Authorization: Bearer wtyk_XXX" \
-  -d '{"data": "PESEL: 44051401359"}'
-```
-
-See `processWithSecurity` tool in `src/server.ts` for complete reference implementation.
-
 ## Documentation
 
 - **[CUSTOMIZATION_GUIDE.md](docs/CUSTOMIZATION_GUIDE.md)** - Step-by-step customization
 - **[DEVELOPMENt_GUIDE.md](/DEVELOPMENT_GUIDE.md)** - Development guide
 - **[DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md)** - Production deployment
-
-**Note:** Tool pricing is defined in each project's idea file (Section 5: Tool Pricing & Token Costs).
 
 ## Project Structure
 
@@ -651,7 +530,7 @@ When customizing, search for `// TODO:` comments in:
 
 **Shared D1 Database:**
 - **ID:** `ebb389aa-2d65-4d38-a0da-50c7da9dfe8b`
-- **Name:** `mcp-tokens-database`
+- **Name:** `mcp-oauth`
 - **DO NOT CHANGE** - Must be the same across all MCP servers
 
 ## Support

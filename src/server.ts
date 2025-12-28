@@ -3,29 +3,26 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import type { Env } from "./types";
 import type { Props } from "./props";
-import { checkBalance, consumeTokensWithRetry } from "./tokenConsumption";
-import { formatInsufficientTokensError } from "./tokenUtils";
 import { TOOL_DESCRIPTIONS, TOOL_TITLES, PARAM_DESCRIPTIONS } from './tool-descriptions';
 
 /**
- * Fast Api Search M C P with Token Integration
+ * Fast Api Search MCP Server
  *
- * This server provides secure, token-based access to the FastAPI framework documentation
+ * This server provides secure access to the FastAPI framework documentation
  * indexed in the ai-search-fast_api_search AI Search instance.
  *
  * Generic type parameters:
  * - Env: Cloudflare Workers environment bindings (KV, D1, WorkOS credentials, AI)
  * - unknown: No state management (stateless server)
- * - Props: Authenticated user context from WorkOS (user, tokens, permissions, userId)
+ * - Props: Authenticated user context from WorkOS (user, permissions, userId)
  *
  * Authentication flow:
  * 1. User connects via MCP client
  * 2. Redirected to WorkOS AuthKit (Magic Auth)
  * 3. User enters email → receives 6-digit code
- * 4. OAuth callback checks if user exists in token database
+ * 4. OAuth callback checks if user exists in database
  * 5. If not in database → 403 error page
  * 6. If in database → Access granted, user info available via this.props
- * 7. All tools check token balance before execution
  */
 export class FastApiSearchMCP extends McpAgent<Env, unknown, Props> {
     server = new McpServer(
@@ -81,33 +78,10 @@ FastAPI - Semantic search for FastAPI framework documentation
                 // Note: No outputSchema - plain text only (Cloudflare pattern)
             },
             async ({ query }) => {
-                const TOOL_COST = 3; // Standard cost for AutoRAG semantic search
-                const TOOL_NAME = "search_fastapi_docs";
                 const RAG_NAME = "fast_api_search";
-                const actionId = crypto.randomUUID();
 
                 try {
-                    // 1. Get user ID
-                    const userId = this.props?.userId;
-                    if (!userId) {
-                        throw new Error("User ID not found in authentication context");
-                    }
-
-                    // 2. Check token balance
-                    const balanceCheck = await checkBalance(this.env.TOKEN_DB, userId, TOOL_COST);
-
-                    // 3. Handle insufficient balance
-                    if (!balanceCheck.sufficient) {
-                        return {
-                            content: [{
-                                type: "text" as const,
-                                text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST)
-                            }],
-                            isError: true
-                        };
-                    }
-
-                    // 4. Execute AutoRAG query
+                    // Execute AutoRAG query
                     if (!this.env.AI) {
                         throw new Error("Workers AI binding not configured. Add 'ai' binding to wrangler.jsonc");
                     }
@@ -121,22 +95,7 @@ FastAPI - Semantic search for FastAPI framework documentation
                         },
                     }) as { response: string };
 
-                    // 5. Consume tokens WITH RETRY and idempotency protection
-                    await consumeTokensWithRetry(
-                        this.env.TOKEN_DB,
-                        userId,
-                        TOOL_COST,
-                        "fast-api-search-mcp",
-                        TOOL_NAME,
-                        {
-                            query: query.substring(0, 100)
-                        },
-                        response.response.substring(0, 200) + '...', // Log truncated result
-                        true,
-                        actionId
-                    );
-
-                    // 6. Return AutoRAG result as plain text
+                    // Return AutoRAG result as plain text
                     // Note: Plain text only (no outputSchema or structuredContent)
                     // Follows Cloudflare pattern and prevents MCP validation errors
                     return {
@@ -199,33 +158,10 @@ FastAPI - Semantic search for FastAPI framework documentation
                 // Note: No outputSchema - plain text only (Cloudflare pattern)
             },
             async ({ query }) => {
-                const TOOL_COST = 4; // Higher cost for code examples search
-                const TOOL_NAME = "search_fastapi_examples";
                 const RAG_NAME = "fast_api_search";
-                const actionId = crypto.randomUUID();
 
                 try {
-                    // 1. Get user ID
-                    const userId = this.props?.userId;
-                    if (!userId) {
-                        throw new Error("User ID not found in authentication context");
-                    }
-
-                    // 2. Check token balance
-                    const balanceCheck = await checkBalance(this.env.TOKEN_DB, userId, TOOL_COST);
-
-                    // 3. Handle insufficient balance
-                    if (!balanceCheck.sufficient) {
-                        return {
-                            content: [{
-                                type: "text" as const,
-                                text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST)
-                            }],
-                            isError: true
-                        };
-                    }
-
-                    // 4. Execute AutoRAG query with code-focused parameters
+                    // Execute AutoRAG query with code-focused parameters
                     if (!this.env.AI) {
                         throw new Error("Workers AI binding not configured. Add 'ai' binding to wrangler.jsonc");
                     }
@@ -239,20 +175,7 @@ FastAPI - Semantic search for FastAPI framework documentation
                         },
                     }) as { response: string };
 
-                    // 5. Consume tokens
-                    await consumeTokensWithRetry(
-                        this.env.TOKEN_DB,
-                        userId,
-                        TOOL_COST,
-                        "fast-api-search-mcp",
-                        TOOL_NAME,
-                        { query: query.substring(0, 100) },
-                        response.response.substring(0, 200) + '...',
-                        true,
-                        actionId
-                    );
-
-                    // 6. Return AutoRAG result as plain text
+                    // Return AutoRAG result as plain text
                     // Note: Plain text only (no outputSchema or structuredContent)
                     // Follows Cloudflare pattern and prevents MCP validation errors
                     return {

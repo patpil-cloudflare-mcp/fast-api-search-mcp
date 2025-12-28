@@ -25,8 +25,6 @@ import type { Env, ResponseFormat } from "./types";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import { ApiClient } from "./api-client";
-import { checkBalance, consumeTokensWithRetry } from "./tokenConsumption";
-import { formatInsufficientTokensError, formatAccountDeletedError } from "./tokenUtils";
 import { TOOL_DESCRIPTIONS, TOOL_TITLES, PARAM_DESCRIPTIONS } from './tool-descriptions';
 
 /**
@@ -166,7 +164,7 @@ const serverCache = new LRUCache<string, McpServer>(MAX_CACHED_SERVERS);
  * @param request - Incoming HTTP request
  * @param env - Cloudflare Workers environment
  * @param ctx - Execution context
- * @param pathname - Request pathname (/sse or /mcp)
+ * @param pathname - Request pathname (/mcp)
  * @returns MCP protocol response
  */
 export async function handleApiKeyRequest(
@@ -205,19 +203,17 @@ export async function handleApiKeyRequest(
     }
 
     console.log(
-      `✅ [API Key Auth] Authenticated user: ${dbUser.email} (${userId}), balance: ${dbUser.current_token_balance} tokens`
+      `✅ [API Key Auth] Authenticated user: ${dbUser.email} (${userId})`
     );
 
     // 4. Create or get cached MCP server with tools
     const server = await getOrCreateServer(env, userId, dbUser.email);
 
-    // 5. Handle the MCP request using the appropriate transport
-    if (pathname === "/sse") {
-      return await handleSSETransport(server, request);
-    } else if (pathname === "/mcp") {
+    // 5. Handle the MCP request using Streamable HTTP transport
+    if (pathname === "/mcp") {
       return await handleHTTPTransport(server, request, env, userId, dbUser.email);
     } else {
-      return jsonError("Invalid endpoint. Use /sse or /mcp", 400);
+      return jsonError("Invalid endpoint. Only /mcp is supported", 400);
     }
   } catch (error) {
     console.error("[API Key Auth] Error:", error);
@@ -275,7 +271,7 @@ async function getOrCreateServer(
   // DO NOT uncomment until you have actual API client methods implemented
 
   // ========================================================================
-  // Tool: Search FastAPI Docs (3 token cost)
+  // Tool: Search FastAPI Docs
   // ========================================================================
   server.registerTool(
     "search_fastapi_docs",
@@ -288,31 +284,9 @@ async function getOrCreateServer(
       // Note: No outputSchema - plain text only (Cloudflare pattern)
     },
     async ({ query }) => {
-      const TOOL_COST = 3;
-      const TOOL_NAME = "search_fastapi_docs";
       const RAG_NAME = "fast_api_search";
-      const actionId = crypto.randomUUID();
 
       try {
-        const balanceCheck = await checkBalance(env.TOKEN_DB, userId, TOOL_COST);
-
-        if (balanceCheck.userDeleted) {
-          return {
-            content: [{ type: "text" as const, text: formatAccountDeletedError(TOOL_NAME) }],
-            isError: true,
-          };
-        }
-
-        if (!balanceCheck.sufficient) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST),
-            }],
-            isError: true,
-          };
-        }
-
         if (!env.AI) {
           throw new Error("Workers AI binding not configured. Add 'ai' binding to wrangler.jsonc");
         }
@@ -326,20 +300,7 @@ async function getOrCreateServer(
           },
         }) as { response: string };
 
-        // 5. Consume tokens WITH RETRY and idempotency protection
-        await consumeTokensWithRetry(
-          env.TOKEN_DB,
-          userId,
-          TOOL_COST,
-          "fast-api-search-mcp",
-          TOOL_NAME,
-          { query: query.substring(0, 100) },
-          response.response.substring(0, 200) + '...',
-          true,
-          actionId
-        );
-
-        // 6. Return AutoRAG result as plain text
+        // Return AutoRAG result as plain text
         // Note: Plain text only (no outputSchema or structuredContent)
         // Follows Cloudflare pattern and prevents MCP validation errors
         return {
@@ -385,7 +346,7 @@ async function getOrCreateServer(
   );
 
   // ========================================================================
-  // Tool: Search FastAPI Examples (4 token cost)
+  // Tool: Search FastAPI Examples
   // ========================================================================
   server.registerTool(
     "search_fastapi_examples",
@@ -398,31 +359,9 @@ async function getOrCreateServer(
       // Note: No outputSchema - plain text only (Cloudflare pattern)
     },
     async ({ query }) => {
-      const TOOL_COST = 4;
-      const TOOL_NAME = "search_fastapi_examples";
       const RAG_NAME = "fast_api_search";
-      const actionId = crypto.randomUUID();
 
       try {
-        const balanceCheck = await checkBalance(env.TOKEN_DB, userId, TOOL_COST);
-
-        if (balanceCheck.userDeleted) {
-          return {
-            content: [{ type: "text" as const, text: formatAccountDeletedError(TOOL_NAME) }],
-            isError: true,
-          };
-        }
-
-        if (!balanceCheck.sufficient) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST),
-            }],
-            isError: true,
-          };
-        }
-
         if (!env.AI) {
           throw new Error("Workers AI binding not configured. Add 'ai' binding to wrangler.jsonc");
         }
@@ -436,20 +375,7 @@ async function getOrCreateServer(
           },
         }) as { response: string };
 
-        // 5. Consume tokens WITH RETRY and idempotency protection
-        await consumeTokensWithRetry(
-          env.TOKEN_DB,
-          userId,
-          TOOL_COST,
-          "fast-api-search-mcp",
-          TOOL_NAME,
-          { query: query.substring(0, 100) },
-          response.response.substring(0, 200) + '...',
-          true,
-          actionId
-        );
-
-        // 6. Return AutoRAG result as plain text
+        // Return AutoRAG result as plain text
         // Note: Plain text only (no outputSchema or structuredContent)
         // Follows Cloudflare pattern and prevents MCP validation errors
         return {
@@ -523,22 +449,9 @@ async function handleHTTPTransport(
   console.log(`📡 [API Key Auth] HTTP transport request from ${userEmail}`);
 
   try {
-    // DNS Rebinding Protection (NEW: SDK 1.20+)
-    const origin = request.headers.get('origin');
-    const ALLOWED_ORIGINS = [
-      'https://claude.ai',
-      'https://chatgpt.com',
-      'https://panel.wtyczki.ai',
-      'https://anythingllm.local'
-    ];
-
-    if (origin && !ALLOWED_ORIGINS.includes(origin)) {
-      console.warn(`[Security] Blocked request from origin: ${origin}`);
-      return jsonRpcResponse("error", null, {
-        code: -32603,
-        message: 'Request origin not allowed'
-      });
-    }
+    // Note: Origin validation is not performed for API key auth
+    // API key authentication itself provides sufficient security
+    // Any MCP-compliant client with a valid API key can connect
 
     // Parse JSON-RPC request
     const jsonRpcRequest = await request.json() as {
@@ -752,28 +665,13 @@ async function executeSearchFastAPIDocsTool(
   args: any,
   env: Env
 ): Promise<any> {
-  const TOOL_COST = 3;
-  const TOOL_NAME = "search_fastapi_docs";
   const RAG_NAME = "fast_api_search";
-  const actionId = crypto.randomUUID();
 
   try {
     const { query } = args;
 
     if (!query || typeof query !== 'string' || query.trim().length === 0) {
       throw new Error("query parameter is required and must be a non-empty string");
-    }
-
-    const balanceCheck = await checkBalance(env.TOKEN_DB, userId, TOOL_COST);
-
-    if (!balanceCheck.sufficient) {
-      return {
-        content: [{
-          type: "text",
-          text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST)
-        }],
-        isError: true
-      };
     }
 
     if (!env.AI) {
@@ -789,20 +687,7 @@ async function executeSearchFastAPIDocsTool(
       },
     }) as { response: string };
 
-    // 5. Consume tokens WITH RETRY and idempotency protection
-    await consumeTokensWithRetry(
-      env.TOKEN_DB,
-      userId,
-      TOOL_COST,
-      "fast-api-search-mcp",
-      TOOL_NAME,
-      { query: query.substring(0, 100) },
-      response.response.substring(0, 200) + '...',
-      true,
-      actionId
-    );
-
-    // 6. Return AutoRAG result as plain text
+    // Return AutoRAG result as plain text
     // Note: Plain text only (no outputSchema or structuredContent)
     // Follows Cloudflare pattern and prevents MCP validation errors
     return {
@@ -851,28 +736,13 @@ async function executeSearchFastAPIExamplesTool(
   args: any,
   env: Env
 ): Promise<any> {
-  const TOOL_COST = 4;
-  const TOOL_NAME = "search_fastapi_examples";
   const RAG_NAME = "fast_api_search";
-  const actionId = crypto.randomUUID();
 
   try {
     const { query } = args;
 
     if (!query || typeof query !== 'string' || query.trim().length === 0) {
       throw new Error("query parameter is required and must be a non-empty string");
-    }
-
-    const balanceCheck = await checkBalance(env.TOKEN_DB, userId, TOOL_COST);
-
-    if (!balanceCheck.sufficient) {
-      return {
-        content: [{
-          type: "text",
-          text: formatInsufficientTokensError(TOOL_NAME, balanceCheck.currentBalance, TOOL_COST)
-        }],
-        isError: true
-      };
     }
 
     if (!env.AI) {
@@ -888,20 +758,7 @@ async function executeSearchFastAPIExamplesTool(
       },
     }) as { response: string };
 
-    // 5. Consume tokens WITH RETRY and idempotency protection
-    await consumeTokensWithRetry(
-      env.TOKEN_DB,
-      userId,
-      TOOL_COST,
-      "fast-api-search-mcp",
-      TOOL_NAME,
-      { query: query.substring(0, 100) },
-      response.response.substring(0, 200) + '...',
-      true,
-      actionId
-    );
-
-    // 6. Return AutoRAG result as plain text
+    // Return AutoRAG result as plain text
     // Note: Plain text only (no outputSchema or structuredContent)
     // Follows Cloudflare pattern and prevents MCP validation errors
     return {
@@ -959,75 +816,6 @@ function jsonRpcResponse(
       "Content-Type": "application/json",
     },
   });
-}
-
-/**
- * Handle SSE (Server-Sent Events) transport for MCP protocol
- *
- * SSE is used by AnythingLLM and other clients for real-time MCP communication.
- * This uses the standard MCP SDK SSEServerTransport for Cloudflare Workers.
- *
- * @param server - Configured MCP server instance
- * @param request - Incoming HTTP request
- * @returns SSE response stream
- */
-async function handleSSETransport(_server: McpServer, _request: Request): Promise<Response> {
-  console.log("📡 [API Key Auth] Setting up SSE transport");
-
-  try {
-    // For Cloudflare Workers, we need to return a Response with a ReadableStream
-    // The MCP SDK's SSEServerTransport expects Node.js streams, so we'll implement
-    // SSE manually for Cloudflare Workers compatibility
-
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const encoder = new TextEncoder();
-
-    // Send SSE headers
-    const response = new Response(readable, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-      },
-    });
-
-    // Connect server to client (handle in background)
-    // Note: This is a simplified implementation for API key auth
-    // Full SSE support would require handling POST messages from client
-
-    (async () => {
-      try {
-        // Send initial connection event
-        await writer.write(encoder.encode("event: message\n"));
-        await writer.write(encoder.encode('data: {"status":"connected"}\n\n'));
-
-        console.log("✅ [API Key Auth] SSE connection established");
-
-        // Keep connection alive
-        const keepAliveInterval = setInterval(async () => {
-          try {
-            await writer.write(encoder.encode(": keepalive\n\n"));
-          } catch (e) {
-            clearInterval(keepAliveInterval);
-          }
-        }, 30000);
-
-        // Note: Full MCP protocol implementation would go here
-        // For MVP, we're providing basic SSE connectivity
-      } catch (error) {
-        console.error("❌ [API Key Auth] SSE error:", error);
-        await writer.close();
-      }
-    })();
-
-    return response;
-  } catch (error) {
-    console.error("❌ [API Key Auth] SSE transport error:", error);
-    throw error;
-  }
 }
 
 /**
